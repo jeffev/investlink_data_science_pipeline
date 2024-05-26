@@ -5,7 +5,7 @@ Este repositório contém um pipeline completo de ciência de dados para coletar
 ## Estrutura do Projeto
 
 ```
-Investlink/
+investlink_data_science_pipeline/
 │
 ├── web_scraping/
 │   ├── __init__.py
