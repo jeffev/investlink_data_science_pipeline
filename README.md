@@ -5,7 +5,7 @@ Este repositório contém um pipeline completo de ciência de dados para coletar
 ## Estrutura do Projeto
 
 ```
-IBXX-Data-Pipeline/
+Investlink/
 │
 ├── web_scraping/
 │   ├── __init__.py
@@ -65,8 +65,8 @@ IBXX-Data-Pipeline/
 
 1. Clone este repositório:
    ```bash
-   git clone https://github.com/seu-usuario/IBXX-Data-Pipeline.git
-   cd IBXX-Data-Pipeline
+   git clone https://github.com/jeffev/investlink_data_science_pipeline.git
+   cd investlink_data_science_pipeline
    ```
 
 2. Construa e inicie os serviços com Docker Compose:
