@@ -5,7 +5,7 @@ Steps:
   1. Winsorize — cap extreme values at 1st/99th percentile globally
   2. Fill nulls — replace NaN with sector+year median (fallback: global median)
   3. Sector z-scores — robust z-score relative to sector in that year
-  4. Composite scores — value / quality / growth / dividend (0–100 percentile rank)
+  4. Composite scores — value / quality / growth / dividend (0–100 percentile rank within sector+year)
 
 Why sector normalization?
     A P/L of 12 is cheap for a tech company but expensive for a utility.
@@ -134,14 +134,30 @@ def add_sector_zscores(
 
 # ── Step 4: Composite scores ─────────────────────────────────────────────────
 
-def _percentile_rank(series: pd.Series) -> pd.Series:
-    """Converts series to percentile rank 0–100. Higher = better position."""
-    return series.rank(method="average", pct=True, na_option="keep") * 100
+def _sector_percentile_rank(df: pd.DataFrame, raw: pd.Series) -> pd.Series:
+    """
+    Ranks `raw` within (sectorname, year) groups, returning percentile 0–100.
+
+    Falls back to global ranking when group columns are absent.
+    This ensures an electric utility's P/L is compared only to other utilities,
+    not to fintechs — consistent with how add_sector_zscores already works.
+    """
+    if "sectorname" not in df.columns or "year" not in df.columns:
+        return raw.rank(method="average", pct=True, na_option="keep") * 100
+
+    tmp = df[["sectorname", "year"]].copy()
+    tmp["_raw"] = raw.values
+    return tmp.groupby(["sectorname", "year"])["_raw"].rank(
+        method="average", pct=True, na_option="keep"
+    ) * 100
 
 
 def add_composite_scores(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates four factor scores (0–100) and a weighted composite_score.
+    Ranking is done within (sectorname, year) groups — a P/L of 12 is cheap
+    for a utility but expensive for a tech company; intra-sector ranking
+    captures this structural difference (consistent with add_sector_zscores).
 
     value_score:    rank on valuation multiples    — lower P/L, P/VP, EV/EBIT = better
     quality_score:  rank on profitability          — higher ROE, ROIC, margins = better
@@ -155,28 +171,28 @@ def add_composite_scores(df: pd.DataFrame) -> pd.DataFrame:
     # Value: lower multiple → negate so that lower raw value → higher score
     avail_value = [c for c in VALUE_COLS if c in df.columns]
     if avail_value:
-        df["value_score"] = _percentile_rank(-df[avail_value].mean(axis=1))
+        df["value_score"] = _sector_percentile_rank(df, -df[avail_value].mean(axis=1))
     else:
         df["value_score"] = 50.0
 
     # Quality: higher is better
     avail_quality = [c for c in QUALITY_COLS if c in df.columns]
     if avail_quality:
-        df["quality_score"] = _percentile_rank(df[avail_quality].mean(axis=1))
+        df["quality_score"] = _sector_percentile_rank(df, df[avail_quality].mean(axis=1))
     else:
         df["quality_score"] = 50.0
 
     # Growth: higher is better
     avail_growth = [c for c in GROWTH_COLS if c in df.columns]
     if avail_growth:
-        df["growth_score"] = _percentile_rank(df[avail_growth].mean(axis=1))
+        df["growth_score"] = _sector_percentile_rank(df, df[avail_growth].mean(axis=1))
     else:
         df["growth_score"] = 50.0
 
     # Dividend: higher is better
     avail_div = [c for c in DIVIDEND_COLS if c in df.columns]
     if avail_div:
-        df["dividend_score"] = _percentile_rank(df[avail_div[0]])
+        df["dividend_score"] = _sector_percentile_rank(df, df[avail_div[0]])
     else:
         df["dividend_score"] = 50.0
 

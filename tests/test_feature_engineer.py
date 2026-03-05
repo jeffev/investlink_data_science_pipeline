@@ -201,6 +201,42 @@ class TestAddCompositeScores:
         for col in ["value_score", "quality_score", "growth_score", "dividend_score", "composite_score"]:
             assert result[col].isna().sum() == 0, f"NaN encontrado em {col}"
 
+    def test_rankeamento_e_setorial_nao_global(self):
+        # Uma empresa pode ser a melhor do setor A e a pior globalmente.
+        # Com rankeamento setorial, seu score deve refletir sua posição DENTRO do setor.
+        # Setor A: p_l = [10, 20, 30, 40, 50]  → empresa com p_l=10 é a mais barata do setor A
+        # Setor B: p_l = [60, 70, 80, 90, 100] → todas mais caras globalmente
+        # Com rank global: empresa p_l=10 seria top1 (melhor valor globalmente)
+        # Com rank setorial: empresa p_l=10 é top1 no setor A; empresa p_l=60 é top1 no setor B
+        n = 10
+        np.random.seed(0)
+        data = {
+            "ticker": [f"T{i}" for i in range(n)],
+            "year":   [2022] * n,
+            "sectorname": ["A"] * 5 + ["B"] * 5,
+        }
+        for col in INDICATOR_COLS:
+            data[col] = [10.0, 20.0, 30.0, 40.0, 50.0,
+                         60.0, 70.0, 80.0, 90.0, 100.0]
+        df = pd.DataFrame(data)
+        result = add_composite_scores(df)
+
+        # Empresa p_l=10 (setor A) e empresa p_l=60 (setor B) devem ter scores idênticos:
+        # ambas são as mais baratas de seus respectivos setores → mesmo percentile
+        score_top_A = result.loc[0, "value_score"]  # p_l=10, melhor do setor A
+        score_top_B = result.loc[5, "value_score"]  # p_l=60, melhor do setor B
+        assert abs(score_top_A - score_top_B) < 1e-9, (
+            f"Rankeamento não é setorial: score_A={score_top_A:.2f}, score_B={score_top_B:.2f}"
+        )
+
+    def test_fallback_global_sem_colunas_de_grupo(self):
+        # Sem sectorname/year, deve usar rank global sem erro
+        df = _make_df(10).drop(columns=["sectorname", "year"])
+        result = add_composite_scores(df)
+        for col in ["value_score", "quality_score", "growth_score", "dividend_score"]:
+            assert col in result.columns
+            assert result[col].between(0, 100).all()
+
 
 # ── engineer_features (pipeline completo) ─────────────────────────────────────
 
