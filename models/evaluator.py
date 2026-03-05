@@ -31,7 +31,7 @@ from sklearn.metrics import (
 )
 from sklearn.utils.class_weight import compute_sample_weight
 
-from models.trainer import DATASET_PATH, MODELS_DIR, FEATURE_COLS, load_and_prepare
+from models.trainer import DATASET_PATH, MODELS_DIR, FEATURE_COLS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,9 +145,11 @@ def plot_feature_importance(
     top_n: int = 20,
     output_path: str | None = None,
 ) -> None:
-    """Plots top-N feature importances. Works for sklearn and XGBoost models."""
+    """Plots top-N feature importances. Works for sklearn and XGBoost models (and Pipelines)."""
     try:
-        importances = model.feature_importances_
+        # Unwrap Pipeline to access the classifier step's importances
+        clf = model.named_steps["clf"] if hasattr(model, "named_steps") else model
+        importances = clf.feature_importances_
     except AttributeError:
         logger.warning("Model does not expose feature_importances_, skipping plot")
         return
@@ -225,9 +227,9 @@ def evaluate_saved_model(
             f"No trained model found at {model_path}. Run trainer.py first."
         )
 
-    model  = joblib.load(model_path)
-    scaler = joblib.load(os.path.join(models_dir, "scaler.joblib"))
-    le     = joblib.load(os.path.join(models_dir, "label_encoder.joblib"))
+    # model is a Pipeline (scaler + clf) — no separate scaler needed
+    model = joblib.load(model_path)
+    le    = joblib.load(os.path.join(models_dir, "label_encoder.joblib"))
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -237,19 +239,16 @@ def evaluate_saved_model(
 
     logger.info(f"Evaluating: {meta['model_version']}  ({meta['model_type']})")
 
-    X, y, _, _, _ = load_and_prepare(dataset_path)
-    # Re-scale with the saved scaler (consistent with training)
-    # Note: X from load_and_prepare is already scaled; reload raw for consistency
     df = pd.read_parquet(dataset_path)
     feat_cols_avail = [c for c in feat_cols if c in df.columns]
     df_ml = df[feat_cols_avail + ["label"]].dropna(subset=["label"])
     df_ml[feat_cols_avail] = df_ml[feat_cols_avail].fillna(df_ml[feat_cols_avail].median())
     X_raw = df_ml[feat_cols_avail].values
-    X_scaled = scaler.transform(X_raw)
     y_enc = le.transform(df_ml["label"])
 
+    # Pass raw X — the Pipeline's scaler step normalizes inside each CV fold
     results, y_pred, y_proba = cross_validate_model(
-        model, X_scaled, y_enc, label_names, cv_folds
+        model, X_raw, y_enc, label_names, cv_folds
     )
 
     plots_dir = os.path.join(models_dir, "plots")

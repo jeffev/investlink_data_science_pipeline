@@ -43,10 +43,12 @@ logger = logging.getLogger(__name__)
 
 def load_artifacts(models_dir: str = MODELS_DIR) -> tuple:
     """
-    Loads model, scaler, label_encoder and metadata from disk.
+    Loads the full Pipeline (scaler + classifier), label_encoder and metadata.
+
+    The model is a sklearn Pipeline — no separate scaler needed.
 
     Returns:
-        (model, scaler, label_encoder, metadata_dict)
+        (model, label_encoder, metadata_dict)
     """
     model_path = os.path.join(models_dir, "best_model.joblib")
     if not os.path.exists(model_path):
@@ -54,9 +56,8 @@ def load_artifacts(models_dir: str = MODELS_DIR) -> tuple:
             f"No trained model at {model_path}. Run 'python models/trainer.py' first."
         )
 
-    model  = joblib.load(os.path.join(models_dir, "best_model.joblib"))
-    scaler = joblib.load(os.path.join(models_dir, "scaler.joblib"))
-    le     = joblib.load(os.path.join(models_dir, "label_encoder.joblib"))
+    model = joblib.load(os.path.join(models_dir, "best_model.joblib"))
+    le    = joblib.load(os.path.join(models_dir, "label_encoder.joblib"))
 
     with open(os.path.join(models_dir, "metadata.json")) as f:
         meta = json.load(f)
@@ -65,7 +66,7 @@ def load_artifacts(models_dir: str = MODELS_DIR) -> tuple:
         f"Loaded model: {meta['model_version']}  "
         f"(CV F1={meta['metrics'].get('cv_f1_weighted_best', '?')})"
     )
-    return model, scaler, le, meta
+    return model, le, meta
 
 
 # ── Feature preparation for current data ─────────────────────────────────────
@@ -121,7 +122,7 @@ def predict(
             ticker, year, label, prob_barata, prob_neutra, prob_cara,
             composite_score, model_version
     """
-    model, scaler, le, meta = load_artifacts(models_dir)
+    model, le, meta = load_artifacts(models_dir)
     feat_cols = meta["feature_cols"]
     version   = meta["model_version"]
     label_classes = meta["label_classes"]   # e.g. ['BARATA', 'NEUTRA', 'CARA']
@@ -129,12 +130,12 @@ def predict(
     df_current, avail_cols = prepare_current_features(feat_cols)
 
     # Fill any remaining NaN with column median (same strategy as training)
+    # The Pipeline's scaler step handles normalization internally
     X_raw = df_current[avail_cols].copy()
     X_raw = X_raw.fillna(X_raw.median())
-    X_scaled = scaler.transform(X_raw.values)
 
-    y_pred  = model.predict(X_scaled)
-    y_proba = model.predict_proba(X_scaled)
+    y_pred  = model.predict(X_raw.values)
+    y_proba = model.predict_proba(X_raw.values)
 
     labels = le.inverse_transform(y_pred)
 

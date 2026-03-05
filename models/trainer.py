@@ -30,6 +30,7 @@ import pandas as pd
 import joblib
 
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.utils.class_weight import compute_sample_weight
@@ -89,10 +90,13 @@ PARAM_GRID_XGB: dict = {
 def load_and_prepare(dataset_path: str) -> tuple[np.ndarray, np.ndarray, LabelEncoder, list[str]]:
     """
     Loads the training parquet, selects available feature columns,
-    encodes labels (BARATA=0, NEUTRA=1, CARA=2) and scales features.
+    encodes labels (BARATA=0, NEUTRA=1, CARA=2).
+
+    Returns raw (unscaled) X so the scaler can be fit exclusively on training
+    folds inside each CV split, preventing leakage from test folds.
 
     Returns:
-        X_scaled      — scaled feature matrix (n_samples, n_features)
+        X_raw         — raw feature matrix (n_samples, n_features), NaN-filled
         y             — encoded label array
         label_encoder — fitted LabelEncoder
         feature_cols  — list of feature column names actually used
@@ -118,14 +122,11 @@ def load_and_prepare(dataset_path: str) -> tuple[np.ndarray, np.ndarray, LabelEn
     le.fit(LABEL_ORDER)
     y = le.transform(df_ml["label"])
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_raw)
-
     logger.info(
-        f"Features: {len(feat_cols)} cols, {X_scaled.shape[0]} samples  "
+        f"Features: {len(feat_cols)} cols, {X_raw.shape[0]} samples  "
         f"| Classes: {dict(zip(le.classes_, np.bincount(y)))}"
     )
-    return X_scaled, y, le, scaler, feat_cols
+    return X_raw, y, le, feat_cols
 
 
 # ── Model training ────────────────────────────────────────────────────────────
@@ -140,14 +141,23 @@ def _run_grid_search(
 ) -> tuple:
     """
     Runs GridSearchCV with stratified k-fold and balanced sample weights.
-    Returns (best_estimator, best_cv_f1_weighted).
+
+    Wraps estimator in a Pipeline([("scaler", StandardScaler()), ("clf", estimator)])
+    so the scaler is fit only on training folds — no leakage from test folds.
+
+    Returns (best_pipeline, best_cv_f1_weighted).
     """
     sample_weights = compute_sample_weight("balanced", y)
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
 
+    pipeline = Pipeline([("scaler", StandardScaler()), ("clf", estimator)])
+
+    # Prefix param_grid keys so GridSearchCV routes them to the "clf" step
+    prefixed_grid = {f"clf__{k}": v for k, v in param_grid.items()}
+
     grid = GridSearchCV(
-        estimator,
-        param_grid,
+        pipeline,
+        prefixed_grid,
         cv=cv,
         scoring="f1_weighted",
         n_jobs=-1,
@@ -159,7 +169,7 @@ def _run_grid_search(
         f"[{name}] GridSearch: {len(param_grid)} params × {cv_folds} folds "
         f"= {cv_folds * _count_combinations(param_grid)} fits"
     )
-    grid.fit(X, y, sample_weight=sample_weights)
+    grid.fit(X, y, clf__sample_weight=sample_weights)
 
     logger.info(
         f"[{name}] Best params:  {grid.best_params_}  "
@@ -194,7 +204,6 @@ def train_xgboost(X: np.ndarray, y: np.ndarray, cv_folds: int):
 
 def save_artifacts(
     model,
-    scaler: StandardScaler,
     le: LabelEncoder,
     feature_cols: list[str],
     metrics: dict,
@@ -202,17 +211,21 @@ def save_artifacts(
     output_dir: str,
 ) -> str:
     """
-    Saves model, scaler, label encoder and metadata to output_dir.
+    Saves the full Pipeline (scaler + classifier), label encoder and metadata.
+
+    The Pipeline includes the StandardScaler as its first step, so no separate
+    scaler.joblib is needed — prediction uses model.predict(X_raw) directly.
 
     Returns the model version string (used in stock_predictions.model_version).
     """
     os.makedirs(output_dir, exist_ok=True)
     version = f"{model_name}_{datetime.now().strftime('%Y%m%d_%H%M')}"
 
-    joblib.dump(model,  os.path.join(output_dir, "best_model.joblib"))
-    joblib.dump(scaler, os.path.join(output_dir, "scaler.joblib"))
-    joblib.dump(le,     os.path.join(output_dir, "label_encoder.joblib"))
+    joblib.dump(model, os.path.join(output_dir, "best_model.joblib"))
+    joblib.dump(le,    os.path.join(output_dir, "label_encoder.joblib"))
 
+    # Extract params from the "clf" step if model is a Pipeline
+    clf_step = model.named_steps["clf"] if hasattr(model, "named_steps") else model
     metadata = {
         "model_version":  version,
         "model_type":     model_name,
@@ -220,7 +233,7 @@ def save_artifacts(
         "label_classes":  le.classes_.tolist(),
         "trained_at":     datetime.utcnow().isoformat(),
         "metrics":        metrics,
-        "params":         model.get_params(),
+        "params":         clf_step.get_params(),
     }
     with open(os.path.join(output_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2, default=str)
@@ -239,9 +252,9 @@ def train(dataset_path: str = DATASET_PATH, cv_folds: int = 5, output_dir: str =
     """
     logger.info("═══ Sprint 3: Model Training ═══")
 
-    X, y, le, scaler, feat_cols = load_and_prepare(dataset_path)
+    X, y, le, feat_cols = load_and_prepare(dataset_path)
 
-    # Train both models
+    # Train both models (each returns a fitted Pipeline with scaler inside)
     gb_model,  gb_score  = train_gradient_boosting(X, y, cv_folds)
     xgb_model, xgb_score = train_xgboost(X, y, cv_folds)
 
@@ -258,8 +271,9 @@ def train(dataset_path: str = DATASET_PATH, cv_folds: int = 5, output_dir: str =
     )
 
     # Final classification report on full dataset (optimistic — use only for inspection)
+    # The Pipeline's "clf" step receives sample_weight via the prefixed kwarg
     sample_weights = compute_sample_weight("balanced", y)
-    best_model.fit(X, y, sample_weight=sample_weights)
+    best_model.fit(X, y, clf__sample_weight=sample_weights)
     y_pred = best_model.predict(X)
 
     report = classification_report(y, y_pred, target_names=le.classes_, output_dict=True)
@@ -279,7 +293,7 @@ def train(dataset_path: str = DATASET_PATH, cv_folds: int = 5, output_dir: str =
         "classification_report": report,
     }
 
-    version = save_artifacts(best_model, scaler, le, feat_cols, metrics, best_name, output_dir)
+    version = save_artifacts(best_model, le, feat_cols, metrics, best_name, output_dir)
     return version
 
 
