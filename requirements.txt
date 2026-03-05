@@ -17,7 +17,7 @@ pandas==2.2.1
 numpy==1.26.4
 
 # ── Machine learning (Sprint 3) ───────────────────────────────────────────────
-scikit-learn==1.4.1
+scikit-learn==1.4.2
 xgboost==2.0.3
 joblib==1.3.2
 
