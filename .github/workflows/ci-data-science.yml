@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  pipeline:
+  lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,13 +13,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          # 3.10+ obrigatório: código usa sintaxe list[str] | None e from __future__ annotations
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -r requirements.txt
 
-      - name: Run tests (if present)
+      - name: Syntax check (py_compile)
+        # Verifica erros de sintaxe em todos os módulos Python sem executá-los
+        run: python -m py_compile $(find . -name "*.py" -not -path "./.git/*")
+
+      - name: Run tests
         run: |
-          if [ -d tests ]; then pytest -q; fi
+          if [ -d tests ]; then
+            pytest -q --tb=short
+          else
+            echo "Sem testes ainda — crie tests/ para habilitar cobertura."
+          fi

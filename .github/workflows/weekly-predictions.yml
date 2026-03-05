@@ -20,9 +20,25 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # torch/transformers (Sprint 4) são pesados e desnecessários aqui
+        run: pip install -r requirements.txt --no-deps torch torchvision torchaudio || pip install -r requirements.txt
 
-      - name: Run prediction pipeline
-        run: python pipeline.py --predict
+      - name: Build dataset, train model and generate predictions
+        # --dataset: reconstrói training_dataset.parquet a partir do DB
+        # --train:   treina GradientBoosting vs XGBoost e salva best_model.joblib
+        # --predict: gera previsões BARATA/NEUTRA/CARA e salva em stock_predictions
+        # Não usamos --scrape aqui pois requer Chrome/Selenium — scraping é
+        # feito via workflow_dispatch separado ou manualmente.
+        run: python pipeline.py --dataset --train --predict
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-model-${{ github.run_id }}
+          path: |
+            models/best_model.joblib
+            models/label_encoder.joblib
+            models/metadata.json
+          retention-days: 30
