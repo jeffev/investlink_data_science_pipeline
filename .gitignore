@@ -1,0 +1,31 @@
+# Dataset de treino — pode ser grande, regerar com build_training_dataset.py
+data/*.parquet
+data/*.csv
+data/*.npy
+
+# Modelos treinados — regerar com trainer.py
+models/*.joblib
+models/*.pkl
+models/metadata.json
+models/plots/
+
+# Logs de scraping
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Variáveis de ambiente
+.env
+
+# ChromeDriver
+chromedriver*

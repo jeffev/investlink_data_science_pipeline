@@ -1,111 +1,200 @@
-# investlink_data_science_pipeline
+# InvestLink — Data Science Pipeline
 
-Este repositório contém um pipeline completo de ciência de dados para coletar, processar, armazenar, analisar e treinar modelos de machine learning usando os indicadores financeiros das ações do IBXX.
+Pipeline completo de ciência de dados para coletar, processar, treinar modelos de machine learning e gerar previsões de valuation das ações do IBXX, integrado ao banco de dados do InvestLink.
 
-## Estrutura do Projeto
+## Estrutura
 
 ```
-investlink_data_science_pipeline/
+data_science_pipeline/
 │
-├── web_scraping/
-│   ├── __init__.py
-│   ├── scraper.py
-│   └── ...
+├── web_scraping/                  # Sprint 1 — Coleta de dados
+│   ├── scraper_indicators.py      # Selenium + StatusInvest → indicadores financeiros
+│   ├── scraper_prices.py          # yfinance → histórico de preços
+│   └── run_scraping.py            # Entry point do scraping com CLI
 │
-├── data_processing/
-│   ├── __init__.py
-│   ├── cleaner.py
-│   └── ...
+├── data_processing/               # Sprint 2 — Feature engineering
+│   ├── processor.py               # Limpeza: winsorize, fill nulos por mediana de setor
+│   ├── feature_engineer.py        # Z-scores setoriais + scores compostos
+│   ├── labeler.py                 # Labels relativos ao Ibovespa (BARATA/NEUTRA/CARA)
+│   └── build_training_dataset.py  # Orquestra processamento → data/training_dataset.parquet
 │
-├── database/
-│   ├── __init__.py
-│   ├── db_manager.py
-│   └── ...
+├── database/                      # Sprint 1 — Persistência
+│   ├── connector.py               # Engine SQLAlchemy via DATABASE_URL
+│   ├── models.py                  # Tabelas: stock_indicators_history, stock_prices_history, stock_predictions
+│   ├── migrations.py              # Cria/atualiza as tabelas no banco
+│   └── queries.py                 # Queries reutilizáveis
 │
-├── analysis/
-│   ├── __init__.py
-│   ├── analyzer.py
-│   └── ...
+├── models/                        # Sprint 3 — Machine learning
+│   ├── trainer.py                 # GradientBoosting vs XGBoost (GridSearchCV + StratifiedKFold 5-fold)
+│   ├── evaluator.py               # Métricas cross-validadas + plots
+│   └── predictor.py               # Normaliza dados atuais e salva previsões no DB
 │
-├── models/
-│   ├── __init__.py
-│   ├── classifier.py
-│   └── regressor.py
+├── analysis/                      # Análises ad-hoc
 │
 ├── notebooks/
-│   ├── data_exploration.ipynb
-│   └── model_training.ipynb
+│   └── 01_eda.ipynb               # Análise exploratória dos dados
 │
-├── utils/
-│   ├── __init__.py
-│   └── helpers.py
+├── data/
+│   └── training_dataset.parquet   # Gerado por build_training_dataset.py (gitignored)
 │
-├── Dockerfile
-├── docker-compose.yml
-└── README.md
+├── pipeline.py                    # Entry point master — orquestra todos os estágios
+├── requirements.txt
+├── .env.example
+└── .gitignore
 ```
 
-## Funcionalidades
+## Lógica do pipeline
 
-- **Coleta de Dados**: Scripts para web scraping dos indicadores financeiros das ações do IBXX.
-- **Processamento de Dados**: Limpeza e processamento dos dados coletados.
-- **Armazenamento de Dados**: Gerenciamento e armazenamento dos dados em um banco de dados.
-- **Análise de Dados**: Análise exploratória dos dados.
-- **Modelos de Machine Learning**: Treinamento e avaliação de modelos de machine learning para prever se uma ação está cara, barata ou neutra, e prever o valor da ação com base nos indicadores financeiros.
-- **Notebooks Jupyter**: Notebooks para exploração e análise interativa dos dados.
+```
+StatusInvest (Selenium)           yfinance
+        │                             │
+        ▼                             ▼
+stock_indicators_history      stock_prices_history
+        │                             │
+        └──────────────┬──────────────┘
+                       ▼
+              processor.py (limpeza)
+              feature_engineer.py (z-scores, scores)
+              labeler.py (labels vs Ibovespa)
+                       │
+                       ▼
+          data/training_dataset.parquet
+                       │
+                       ▼
+           trainer.py → best_model.joblib
+           evaluator.py → métricas
+           predictor.py → stock_predictions (DB)
+```
+
+### Labels
+
+Alpha = retorno da ação − retorno do Ibovespa no período:
+
+| Label   | Condição         |
+|---------|------------------|
+| BARATA  | alpha > +15%     |
+| CARA    | alpha < −15%     |
+| NEUTRA  | entre −15% e +15%|
+
+### Scores compostos (0–100)
+
+| Score    | Peso |
+|----------|------|
+| value    | 30%  |
+| quality  | 35%  |
+| growth   | 20%  |
+| dividend | 15%  |
 
 ## Instalação
 
 ### Pré-requisitos
 
-- [Docker](https://www.docker.com/)
-- [Docker Compose](https://docs.docker.com/compose/)
+- Python 3.10+
+- PostgreSQL (ou via Docker Compose do InvestLink)
+- Google Chrome (para o Selenium)
 
 ### Passos
 
-1. Clone este repositório:
-   ```bash
-   git clone https://github.com/jeffev/investlink_data_science_pipeline.git
-   cd investlink_data_science_pipeline
-   ```
+```bash
+# 1. Clone o repositório
+git clone https://github.com/jeffev/investlink_data_science_pipeline.git
+cd investlink_data_science_pipeline
 
-2. Construa e inicie os serviços com Docker Compose:
-   ```bash
-   docker-compose up --build
-   ```
+# 2. Instale as dependências
+pip install -r requirements.txt
+
+# 3. Configure o banco de dados
+cp .env.example .env
+# Edite .env com a DATABASE_URL correta
+
+# 4. Crie as tabelas
+python database/migrations.py
+```
+
+### Variáveis de ambiente
+
+```bash
+# .env
+DATABASE_URL=postgresql://postgres:senha@localhost:5433/investlink
+```
+
+A porta padrão em desenvolvimento local é `5433` (mapeada no `docker-compose.yml` do InvestLink).
 
 ## Uso
 
-### Coleta de Dados
+### Pipeline completo (todos os estágios)
 
-Para iniciar a coleta de dados, execute o script `scraper.py`:
 ```bash
-python web_scraping/scraper.py
+python pipeline.py --all
 ```
 
-### Processamento de Dados
+### Estágios individuais
 
-Para processar os dados coletados, execute o script `cleaner.py`:
 ```bash
-python data_processing/cleaner.py
+# Coleta de dados (indicadores + preços)
+python pipeline.py --scrape
+
+# Gerar dataset de treinamento
+python pipeline.py --dataset
+
+# Treinar modelo
+python pipeline.py --train
+
+# Avaliar modelo existente
+python pipeline.py --evaluate
+
+# Gerar previsões e salvar no banco
+python pipeline.py --predict
 ```
 
-### Análise de Dados
+### Combinações comuns
 
-Para realizar a análise dos dados, utilize os notebooks Jupyter disponíveis no diretório `notebooks/`.
+```bash
+# Re-treinar e re-prever (dados já no banco)
+python pipeline.py --train --predict
 
-### Treinamento de Modelos
+# Scraping de tickers específicos e previsão
+python pipeline.py --scrape --predict --tickers VALE3 PETR4 ITUB4
 
-Para treinar os modelos de machine learning, execute os scripts no diretório `models/` ou utilize os notebooks Jupyter.
+# Pipeline completo com browser visível (debug)
+python pipeline.py --all --no-headless
 
-## Contribuição
+# Previsão simulada sem gravar no banco
+python pipeline.py --predict --dry-run
+```
 
-Contribuições são bem-vindas! Sinta-se à vontade para abrir issues e pull requests.
+### Scraping standalone
 
-## Licença
+```bash
+# Todos os indicadores e preços
+python web_scraping/run_scraping.py --mode all
 
-Este projeto está licenciado sob a [MIT License](LICENSE).
+# Só indicadores
+python web_scraping/run_scraping.py --mode indicators
 
-## Contato
+# Tickers específicos, forçando re-scrape
+python web_scraping/run_scraping.py --tickers VALE3 PETR4 --force
 
-Para mais informações, entre em contato com Jefferson Valandro em [jeffev123@gmail.com](mailto:jeffev123@gmail.com).
+# Com browser visível
+python web_scraping/run_scraping.py --no-headless
+```
+
+### Dataset standalone
+
+```bash
+python data_processing/build_training_dataset.py
+
+# Sem labels relativos ao Ibovespa
+python data_processing/build_training_dataset.py --no-relative
+```
+
+## Dependências principais
+
+| Categoria        | Biblioteca                              |
+|------------------|-----------------------------------------|
+| Banco de dados   | SQLAlchemy 2.0, psycopg2-binary         |
+| Web scraping     | Selenium 4, BeautifulSoup4, yfinance    |
+| Processamento    | pandas, numpy                           |
+| Machine learning | scikit-learn, XGBoost, joblib           |
+| Visualização     | matplotlib, seaborn, jupyter            |
+| NLP (Sprint 4)   | transformers, torch                     |
