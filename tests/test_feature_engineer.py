@@ -86,12 +86,13 @@ class TestWinsorize:
 
 class TestFillNullsWithSectorMedian:
     def test_preenche_nan_com_mediana_do_setor(self):
-        df = _make_df(6)
-        df["sectorname"] = ["A", "A", "A", "B", "B", "B"]
-        df["p_l"]        = [10.0, 20.0, np.nan, 50.0, 60.0, np.nan]
+        # Precisa de >= MIN_SECTOR_SIZE (3) valores não-nulos por grupo para usar mediana setorial
+        df = _make_df(8)
+        df["sectorname"] = ["A", "A", "A", "A", "B", "B", "B", "B"]
+        df["p_l"]        = [10.0, 20.0, 30.0, np.nan, 50.0, 60.0, 70.0, np.nan]
         result = fill_nulls_with_sector_median(df)
-        assert abs(result["p_l"].iloc[2] - 15.0) < 1e-9   # mediana([10, 20]) = 15
-        assert abs(result["p_l"].iloc[5] - 55.0) < 1e-9   # mediana([50, 60]) = 55
+        assert abs(result["p_l"].iloc[3] - 20.0) < 1e-9   # mediana([10, 20, 30]) = 20
+        assert abs(result["p_l"].iloc[7] - 60.0) < 1e-9   # mediana([50, 60, 70]) = 60
 
     def test_sem_nan_apos_preenchimento(self):
         df = _make_df(20)
