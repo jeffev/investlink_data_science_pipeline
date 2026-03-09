@@ -21,7 +21,7 @@ jobs:
 
       - name: Install dependencies
         # torch/transformers (Sprint 4) são pesados e desnecessários aqui
-        run: pip install -r requirements.txt --no-deps torch torchvision torchaudio || pip install -r requirements.txt
+        run: grep -vE '^(torch|transformers|torchaudio|torchvision)==' requirements.txt | pip install -r /dev/stdin
 
       - name: Build dataset, train model and generate predictions
         # --dataset: reconstrói training_dataset.parquet a partir do DB
